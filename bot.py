@@ -115,7 +115,7 @@ def ask_claude(client, comment, title):
             "content": f"Відео: «{title}»\nКоментар глядача:\n{comment}",
         }],
     )
-    raw = msg.content[0].text.strip()
+    raw = next(b.text for b in msg.content if b.type == "text").strip()
     start, end = raw.find("{"), raw.rfind("}")
     return json.loads(raw[start:end + 1])
 
