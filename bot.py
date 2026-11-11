@@ -36,7 +36,10 @@ SYSTEM_PROMPT = f"""Ти — автор україномовного YouTube-к�
 Тобі дають коментар глядача і назву відео. Вирішуєш, чи відповідати, і пишеш відповідь.
 
 ПРАВИЛА ВІДПОВІДІ:
-- Тільки українською мовою, тепло й по-людськи, 1–3 речення, без шаблонів — кожна відповідь своя.
+- Тільки українською мовою, тепло й по-людськи, 1–3 речення.
+- КОЖНА ВІДПОВІДЬ УНІКАЛЬНА. Не починай із «Дякуємо за…» щоразу — чергуй початки: звертання на ім'я, питання у відповідь, цікавий факт, жартівливе зауваження, згадка конкретної деталі з коментаря.
+- Не повторюй фрази, звороти й початки з уже написаних сьогодні відповідей (їх дадуть нижче).
+- Чіпляйся за конкретику коментаря (село, бабуся, страва, слово) — щоб було видно, що відповідь саме цій людині.
 - Відповідай по суті коментаря: на спогад — подякуй і додай доречну деталь; на питання — коротко й точно; на місто чи село — скажи щось конкретне про нього.
 - Пиши лише факти, у яких цілком упевнений. Якщо не впевнений — не вигадуй, краще просто подякуй.
 - ТЕМА ВІЙНИ — ТАБУ: ніколи не згадуй війну, фронт, обстріли, окупацію, армію, сучасну політику.
@@ -105,19 +108,27 @@ def video_titles(yt, video_ids):
     return titles
 
 
-def ask_claude(client, comment, title):
-    msg = client.messages.create(
-        model=MODEL,
-        max_tokens=600,
-        system=SYSTEM_PROMPT,
-        messages=[{
-            "role": "user",
-            "content": f"Відео: «{title}»\nКоментар глядача:\n{comment}",
-        }],
+def ask_claude(client, comment, title, previous):
+    prev = "\n".join(f"- {p}" for p in previous[-15:]) or "(ще немає)"
+    content = (
+        f"Відео: «{title}»\nКоментар глядача:\n{comment}\n\n"
+        f"Вже написані відповіді (НЕ повторюй їхні початки й фрази):\n{prev}"
     )
-    raw = next(b.text for b in msg.content if b.type == "text").strip()
-    start, end = raw.find("{"), raw.rfind("}")
-    return json.loads(raw[start:end + 1])
+    for _ in range(2):  # повтор, если Claude ответил не в формате JSON
+        msg = client.messages.create(
+            model=MODEL,
+            max_tokens=800,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": content}],
+        )
+        raw = "".join(b.text for b in msg.content if b.type == "text").strip()
+        start, end = raw.find("{"), raw.rfind("}")
+        if start != -1 and end > start:
+            try:
+                return json.loads(raw[start:end + 1])
+            except json.JSONDecodeError:
+                pass
+    raise ValueError("Claude не вернул JSON")
 
 
 def post_reply(yt, parent_id, text):
@@ -132,8 +143,16 @@ def main():
     claude = anthropic.Anthropic()
     cutoff = datetime.now(timezone.utc) - timedelta(hours=MAX_AGE_HOURS)
 
-    candidates = []
-    for t in fetch_threads(yt):
+    candidates, previous = [], []
+    threads = fetch_threads(yt)
+    # свежие ответы канала — чтобы новые не повторяли старые
+    for t in threads:
+        for r in t.get("replies", {}).get("comments", []):
+            if r["snippet"].get("authorChannelId", {}).get("value") == CHANNEL_ID:
+                previous.append(r["snippet"]["textDisplay"].replace(SIGNATURE, "").strip()[:200])
+    previous = previous[:15][::-1]
+
+    for t in threads:
         top = t["snippet"]["topLevelComment"]
         s = top["snippet"]
         author = s.get("authorChannelId", {}).get("value")
@@ -152,7 +171,7 @@ def main():
         if replied >= MAX_REPLIES:
             break
         try:
-            decision = ask_claude(claude, text, titles.get(video_id, ""))
+            decision = ask_claude(claude, text, titles.get(video_id, ""), previous)
         except Exception as e:
             print(f"[ERR] {author}: Claude — {e}")
             continue
@@ -164,6 +183,7 @@ def main():
         reply = decision["text"].strip()
         if SIGNATURE not in reply:
             reply = f"{reply}\n{SIGNATURE}"
+        previous.append(reply.replace(SIGNATURE, "").strip())
 
         if DRY_RUN:
             print(f"[DRY] {author}: {text[:80]!r}\n      → {reply}")
