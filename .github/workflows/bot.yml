@@ -2,7 +2,7 @@ name: Zabuta comment bot
 
 on:
   schedule:
-        - cron: "7,37 * * * *"
+        - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
