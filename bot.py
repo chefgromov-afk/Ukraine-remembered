@@ -25,7 +25,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 CHANNEL_ID = "UCyXY4lu8PGR6a5u2pHMu3Og"  # Забута Україна
-MODEL = "claude-sonnet-5-5"
+MODEL = "claude-haiku-5-5"
 SIGNATURE = "Підписуйтеся — попереду ще багато забутого 🙏"
 
 MAX_REPLIES = int(os.getenv("MAX_REPLIES", "15"))
