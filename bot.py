@@ -15,7 +15,6 @@
   DRY_RUN=1 — ничего не публиковать, только показать, что бы ответил
 """
 
-import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -48,15 +47,30 @@ SYSTEM_PROMPT = f"""Ти — автор україномовного YouTube-к�
 
 КОЛИ ПРОПУСКАТИ (action = "skip"):
 - коментар про війну, політику, владу, корупцію, сучасних політиків;
+- натяки на Росію чи сучасні події, навіть якщо звучать побутово: «сусід», «сусіди», «вони», «рашка», «варвари», «орда», «ті що на сході», «зараз», «раби» тощо у розмові про народи чи долю країни;
 - проросійський, грубий, образливий, з лайкою або зневагою до будь-якого народу;
 - спам, реклама, посилання, незрозумілий набір символів;
 - коментар, на який неможливо відповісти без вигадування фактів;
 - сарказм або провокація.
 У сумнівних випадках — пропускай.
 
-Відповідай ЛИШЕ JSON без жодного іншого тексту:
-{{"action": "reply" або "skip", "reason": "коротко чому", "text": "текст відповіді або порожньо"}}
+Своє рішення повертай ЛИШЕ через інструмент decide.
 """
+
+
+DECIDE_TOOL = {
+    "name": "decide",
+    "description": "Рішення щодо коментаря: відповісти чи пропустити.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["reply", "skip"]},
+            "reason": {"type": "string", "description": "коротко чому"},
+            "text": {"type": "string", "description": "текст відповіді або порожньо"},
+        },
+        "required": ["action", "reason", "text"],
+    },
+}
 
 
 def youtube_client():
@@ -114,21 +128,19 @@ def ask_claude(client, comment, title, previous):
         f"Відео: «{title}»\nКоментар глядача:\n{comment}\n\n"
         f"Вже написані відповіді (НЕ повторюй їхні початки й фрази):\n{prev}"
     )
-    for _ in range(2):  # повтор, если Claude ответил не в формате JSON
+    for _ in range(2):  # повтор, если Claude не вызвал инструмент
         msg = client.messages.create(
             model=MODEL,
             max_tokens=800,
             system=SYSTEM_PROMPT,
+            tools=[DECIDE_TOOL],
+            tool_choice={"type": "tool", "name": "decide"},
             messages=[{"role": "user", "content": content}],
         )
-        raw = "".join(b.text for b in msg.content if b.type == "text").strip()
-        start, end = raw.find("{"), raw.rfind("}")
-        if start != -1 and end > start:
-            try:
-                return json.loads(raw[start:end + 1])
-            except json.JSONDecodeError:
-                pass
-    raise ValueError("Claude не вернул JSON")
+        for b in msg.content:
+            if b.type == "tool_use":
+                return b.input
+    raise ValueError("Claude не вернул решение")
 
 
 def post_reply(yt, parent_id, text):
